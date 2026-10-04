@@ -71,3 +71,58 @@ describe("fetchIndexableReputationHandles", () => {
     expect(result.data).toEqual(["mock-handle"]);
   });
 });
+
+describe("parseRetryAfter", () => {
+  it("parses integer seconds correctly", () => {
+    const { parseRetryAfter } = require("./api");
+    expect(parseRetryAfter("120")).toBe(120);
+    expect(parseRetryAfter("0")).toBe(0);
+    expect(parseRetryAfter("  45  ")).toBe(45);
+    expect(parseRetryAfter("-10")).toBeUndefined();
+    expect(parseRetryAfter("invalid")).toBeUndefined();
+  });
+
+  it("parses HTTP-date headers into remaining seconds", () => {
+    const { parseRetryAfter } = require("./api");
+    const futureDate = new Date(Date.now() + 60_000).toUTCString();
+    const seconds = parseRetryAfter(futureDate);
+    expect(seconds).toBeGreaterThanOrEqual(58);
+    expect(seconds).toBeLessThanOrEqual(61);
+  });
+});
+
+describe("apiRequest rate limiting (429)", () => {
+  const originalFetch = global.fetch;
+
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("formats 429 error message correctly with integer Retry-After", async () => {
+    const { apiRequest, ApiRequestError } = require("./api");
+    global.fetch = jest.fn().mockResolvedValue({
+      status: 429,
+      ok: false,
+      headers: new Headers({ "Retry-After": "30" }),
+    }) as unknown as typeof fetch;
+
+    await expect(apiRequest("/test-endpoint")).rejects.toThrow(ApiRequestError);
+    await expect(apiRequest("/test-endpoint")).rejects.toThrow(
+      "You're doing that too fast. Please wait 30 seconds before trying again.",
+    );
+  });
+
+  it("formats 429 error message correctly without Retry-After header", async () => {
+    const { apiRequest } = require("./api");
+    global.fetch = jest.fn().mockResolvedValue({
+      status: 429,
+      ok: false,
+      headers: new Headers(),
+    }) as unknown as typeof fetch;
+
+    await expect(apiRequest("/test-endpoint-no-header")).rejects.toThrow(
+      "You're doing that too fast.",
+    );
+  });
+});
+
