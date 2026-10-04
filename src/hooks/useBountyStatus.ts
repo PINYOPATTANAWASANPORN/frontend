@@ -1,5 +1,6 @@
+import { useRef } from 'react';
 import { useSmartPolling } from './useSmartPolling';
-import { fetchBounty } from '@/lib/api';
+import { fetchBounty, fetchLiveBounty } from '@/lib/api';
 import type { Bounty, BountyStatus } from '@/types/bounty';
 
 interface UseBountyStatusOptions {
@@ -28,6 +29,14 @@ export function useBountyStatus({
   enabled = true,
   onStatusChange,
 }: UseBountyStatusOptions): UseBountyStatusResult {
+  const hasLiveRef = useRef(false);
+  const lastBountyIdRef = useRef(bountyId);
+
+  if (lastBountyIdRef.current !== bountyId) {
+    lastBountyIdRef.current = bountyId;
+    hasLiveRef.current = false;
+  }
+
   const {
     data,
     isLoading,
@@ -37,8 +46,19 @@ export function useBountyStatus({
     isBackingOff,
   } = useSmartPolling<{ data: Bounty | undefined; source: 'live' | 'mock' }>({
     fetchFn: async () => {
-      const result = await fetchBounty(bountyId, fallbackBounty);
-      return result;
+      if (hasLiveRef.current) {
+        return await fetchLiveBounty(bountyId);
+      }
+      try {
+        const result = await fetchLiveBounty(bountyId);
+        hasLiveRef.current = true;
+        return result;
+      } catch (err) {
+        if (fallbackBounty !== undefined) {
+          return { data: fallbackBounty, source: 'mock' };
+        }
+        throw err;
+      }
     },
     interval,
     enabled,
