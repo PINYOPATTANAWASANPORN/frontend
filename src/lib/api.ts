@@ -95,6 +95,22 @@ async function dedupedFetch<T>(
   return promise;
 }
 
+export function parseRetryAfter(header: string): number | undefined {
+  const trimmed = header.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const sec = parseInt(trimmed, 10);
+    return Number.isFinite(sec) && sec >= 0 ? sec : undefined;
+  }
+  if (!trimmed.includes("GMT") && !trimmed.includes(",")) {
+    return undefined;
+  }
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, Math.ceil((dateMs - Date.now()) / 1000));
+  }
+  return undefined;
+}
+
 /**
  * Client-side call that attaches the signed-in user's JWT (if any) and
  * surfaces backend error bodies instead of silently falling back — used for
@@ -132,14 +148,14 @@ export async function apiRequest<T>(
     // --- Rate-limit handling (#44) ---
     if (res.status === 429) {
       const retryAfter = res.headers.get("Retry-After");
-      const seconds = retryAfter ? parseInt(retryAfter, 10) : NaN;
-      const waitMsg = Number.isFinite(seconds)
+      const seconds = retryAfter ? parseRetryAfter(retryAfter) : undefined;
+      const waitMsg = seconds !== undefined
         ? ` Please wait ${seconds} second${seconds === 1 ? "" : "s"} before trying again.`
         : "";
       throw new ApiRequestError(
-        `You're doing that too fast.${waitMsg}` || `Rate limited. Please try again later.`,
+        `You're doing that too fast.${waitMsg}`,
         429,
-        Number.isFinite(seconds) ? seconds : undefined,
+        seconds,
       );
     }
 
