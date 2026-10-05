@@ -195,13 +195,19 @@ export async function fetchBounties(
   }
 }
 
+export async function fetchLiveBounty(
+  id: string,
+): Promise<FetchResult<Bounty>> {
+  const raw = await request<RawBounty>(`/bounties/${id}`);
+  return { data: adaptBounty(raw), source: "live" };
+}
+
 export async function fetchBounty(
   id: string,
   fallback: Bounty | undefined,
 ): Promise<FetchResult<Bounty | undefined>> {
   try {
-    const raw = await request<RawBounty>(`/bounties/${id}`);
-    return { data: adaptBounty(raw), source: "live" };
+    return await fetchLiveBounty(id);
   } catch {
     return { data: fallback, source: "mock" };
   }
