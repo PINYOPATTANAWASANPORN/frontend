@@ -41,7 +41,7 @@ function pollingReducer(state: PollingState, action: PollingAction): PollingStat
     case 'START_POLLING':
       return { ...state, isPolling: true };
     case 'STOP_POLLING':
-      return { ...state, isPolling: false };
+      return { ...state, isPolling: false, isBackingOff: false };
     case 'START_BACKOFF':
       return { ...state, isBackingOff: true };
     case 'STOP_BACKOFF':
@@ -73,17 +73,24 @@ export function useSmartPolling<T>({
   const previousDataRef = useRef<T | null>(null);
   const isBackgroundedRef = useRef(false);
 
+  const fetchFnRef = useRef(fetchFn);
+  fetchFnRef.current = fetchFn;
+  const compareFnRef = useRef(compareFn);
+  compareFnRef.current = compareFn;
+  const onDataChangeRef = useRef(onDataChange);
+  onDataChangeRef.current = onDataChange;
+
   const fetchData = useCallback(async () => {
     if (!isMountedRef.current) return;
     
     try {
       setIsLoading(true);
-      const result = await fetchFn();
+      const result = await fetchFnRef.current();
       
       if (!isMountedRef.current) return;
 
       const hasChanged = previousDataRef.current !== null 
-        ? !compareFn(previousDataRef.current, result)
+        ? !compareFnRef.current(previousDataRef.current, result)
         : true;
 
       if (hasChanged) {
@@ -92,7 +99,7 @@ export function useSmartPolling<T>({
         unchangedCountRef.current = 0;
         currentIntervalRef.current = interval;
         dispatch({ type: 'STOP_BACKOFF' });
-        onDataChange?.(result);
+        onDataChangeRef.current?.(result);
       } else {
         unchangedCountRef.current += 1;
         
@@ -104,6 +111,10 @@ export function useSmartPolling<T>({
           if (newInterval > currentIntervalRef.current) {
             currentIntervalRef.current = newInterval;
             dispatch({ type: 'START_BACKOFF' });
+            if (intervalRef.current && !isBackgroundedRef.current && enabled) {
+              clearInterval(intervalRef.current);
+              intervalRef.current = setInterval(fetchData, currentIntervalRef.current);
+            }
           }
         }
       }
@@ -118,7 +129,7 @@ export function useSmartPolling<T>({
         setIsLoading(false);
       }
     }
-  }, [fetchFn, compareFn, interval, backoffMultiplier, maxBackoff, unchangedThreshold, onDataChange]);
+  }, [interval, backoffMultiplier, maxBackoff, unchangedThreshold, enabled]);
 
   const refetch = useCallback(async () => {
     currentIntervalRef.current = interval;
@@ -154,31 +165,33 @@ export function useSmartPolling<T>({
     };
   }, [enabled, fetchData]);
 
-  // Main polling effect - use a ref to track initial mount
-  const hasInitialized = useRef(false);
-
+  // Main polling effect responding deterministically to enabled state
   useEffect(() => {
     isMountedRef.current = true;
 
     if (!enabled) {
-      return;
-    }
-
-    // Only start polling on initial mount or when enabled changes
-    if (!hasInitialized.current) {
-      hasInitialized.current = true;
-      dispatch({ type: 'START_POLLING' });
-      fetchData();
-      intervalRef.current = setInterval(fetchData, currentIntervalRef.current);
-    }
-
-    return () => {
-      isMountedRef.current = false;
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
-      // Don't dispatch STOP_POLLING here to avoid state updates during unmount
+      dispatch({ type: 'STOP_POLLING' });
+      return;
+    }
+
+    dispatch({ type: 'START_POLLING' });
+    fetchData();
+
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    intervalRef.current = setInterval(fetchData, currentIntervalRef.current);
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      dispatch({ type: 'STOP_POLLING' });
     };
   }, [enabled, fetchData]);
 
